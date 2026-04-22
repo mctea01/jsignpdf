@@ -154,20 +154,40 @@ public class Signer {
         if (showGui) {
             if (Boolean.getBoolean("jsignpdf.swing")) {
                 // Legacy Swing GUI (preserved for fallback)
-                try {
-                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-                } catch (Exception e) {
-                    System.err.println("Can't set Look&Feel.");
-                }
-                SignPdfForm tmpForm = new SignPdfForm(WindowConstants.EXIT_ON_CLOSE, tmpOpts);
-                tmpForm.pack();
-                GuiUtils.center(tmpForm);
-                tmpForm.setVisible(true);
+                launchSwing(tmpOpts);
             } else {
-                // New JavaFX GUI (default)
-                FxLauncher.launch(tmpOpts);
+                // New JavaFX GUI (default) with automatic fallback to Swing
+                try {
+                    FxLauncher.launch(tmpOpts);
+                } catch (Throwable fxErr) {
+                    System.err.println("JavaFX UI failed to start; falling back to Swing UI. Reason: " + fxErr);
+                    LOGGER.log(Level.WARNING, "JavaFX UI failed to start; falling back to Swing UI", fxErr);
+
+                    try {
+                        launchSwing(tmpOpts);
+                    } catch (Throwable swingErr) {
+                        // If both UIs fail, rethrow the original FX error (most relevant)
+                        LOGGER.log(Level.SEVERE, "Swing UI fallback also failed", swingErr);
+                        if (fxErr instanceof RuntimeException) {
+                            throw (RuntimeException) fxErr;
+                        }
+                        throw new RuntimeException(fxErr);
+                    }
+                }
             }
         }
+    }
+
+    private static void launchSwing(SignerOptionsFromCmdLine tmpOpts) {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            System.err.println("Can't set Look&Feel.");
+        }
+        SignPdfForm tmpForm = new SignPdfForm(WindowConstants.EXIT_ON_CLOSE, tmpOpts);
+        tmpForm.pack();
+        GuiUtils.center(tmpForm);
+        tmpForm.setVisible(true);
     }
 
     /**

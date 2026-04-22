@@ -35,6 +35,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.URISyntaxException;
 import java.util.Properties;
 import java.util.logging.Level;
 
@@ -57,9 +58,27 @@ public class PropertyProvider {
     /**
      * <code>PROPERTY_FILE</code> contains default filename for property file.
      */
-    public static final String PROPERTY_FILE = System.getProperty("user.home") + "/.JSignPdf";
+    // Replace the existing public static final String PROPERTY_FILE initializer
+    public static final String PROPERTY_FILE = computeDefaultPropertyFilePath();
 
     private static final File PROPERTY_FILE_FILE = new File(PROPERTY_FILE);
+
+    private static File getJarBaseDirOrNull() {
+        try {
+            return new File(PropertyProvider.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getParentFile();
+        } catch (URISyntaxException e) {
+            return null;
+        }
+    }
+
+    private static String computeDefaultPropertyFilePath() {
+        File baseDir = getJarBaseDirOrNull();
+        if (baseDir != null) {
+            return new File(baseDir, ".JSignPdf").getPath();
+        } else {
+            return System.getProperty("user.home") + "/.JSignPdf";
+        }
+    }
 
     private Properties properties;
 

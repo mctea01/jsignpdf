@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.logging.Level;
 
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
@@ -17,6 +18,7 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Label;
@@ -36,8 +38,12 @@ import javafx.scene.input.KeyEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.StackPane;
-import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.util.Duration;
+
+import net.sf.jsignpdf.fx.util.NativeFileChooser;
+import net.sf.jsignpdf.fx.util.NativeFileChooser.ExtensionFilter;
+import net.sf.jsignpdf.fx.util.Sandbox;
 
 import org.openpdf.text.exceptions.BadPasswordException;
 
@@ -49,6 +55,7 @@ import net.sf.jsignpdf.fx.control.PdfPageView;
 import net.sf.jsignpdf.fx.control.SignatureOverlay;
 import net.sf.jsignpdf.fx.service.PdfRenderService;
 import net.sf.jsignpdf.fx.service.SigningService;
+import net.sf.jsignpdf.fx.preferences.PreferencesController;
 import net.sf.jsignpdf.fx.preset.ManagePresetsDialog;
 import net.sf.jsignpdf.fx.preset.Preset;
 import net.sf.jsignpdf.fx.preset.PresetManager;
@@ -82,6 +89,7 @@ public class MainWindowController {
     private SignatureOverlay signatureOverlay;
     /** Holds the side panel node while it's detached from the SplitPane (hidden). */
     private Node detachedSidePanel;
+    private PauseTransition shiftHintTimer;
 
     // Included sub-controllers (fx:id + "Controller" naming convention)
     @FXML private VBox certificateSettings;
@@ -112,6 +120,7 @@ public class MainWindowController {
     @FXML private MenuItem menuResetSettings;
     @FXML private MenuItem menuSavePresetAsNew;
     @FXML private MenuItem menuManagePresets;
+    @FXML private MenuItem menuPreferences;
     @FXML private MenuItem menuAbout;
 
     // Toolbar
@@ -141,6 +150,7 @@ public class MainWindowController {
     // Status bar
     @FXML private Label lblStatus;
     @FXML private Label lblSigStateBadge;
+    @FXML private Label lblSigCoords;
     @FXML private Label lblOutputPath;
     @FXML private ProgressBar progressBar;
 
@@ -211,6 +221,7 @@ public class MainWindowController {
         signatureOverlay = new SignatureOverlay(placementVM);
         signatureOverlay.setVisible(false);
         signatureOverlay.setMouseTransparent(false);
+        signatureOverlay.setOnReplaceBlocked(this::showShiftHint);
         pdfArea.getChildren().add(0, pdfPageView);
         pdfArea.getChildren().add(1, signatureOverlay);
 
@@ -227,7 +238,18 @@ public class MainWindowController {
                 signingVM.visibleProperty().set(true);
             }
             updateStatusWithHint();
+            updateSigCoordsBadge();
         });
+
+        // Keep coords badge in sync as the rectangle is moved or resized
+        Runnable syncCoordsFromPlacement = () -> {
+            capturePlacementToSigningVM();
+            updateSigCoordsBadge();
+        };
+        placementVM.relXProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relYProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relWidthProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
+        placementVM.relHeightProperty().addListener((obs, o, n) -> syncCoordsFromPlacement.run());
 
         // React to visible-signature state changes:
         //  - disabled: clear the placement rectangle
@@ -260,6 +282,9 @@ public class MainWindowController {
         // colour swap based on whether visible signature is on or off.
         lblSigStateBadge.managedProperty().bind(lblSigStateBadge.visibleProperty());
         lblSigStateBadge.visibleProperty().bind(documentVM.documentLoadedProperty());
+
+        // Coords badge: managed tracks visible so it takes no space when hidden
+        lblSigCoords.managedProperty().bind(lblSigCoords.visibleProperty());
 
         // Status-bar output path label: visible when a document is loaded
         lblOutputPath.managedProperty().bind(lblOutputPath.visibleProperty());
@@ -297,6 +322,8 @@ public class MainWindowController {
             txtPageNumber.setText(String.valueOf(newVal.intValue()));
             renderCurrentPage();
             updateNavButtonState();
+            capturePlacementToSigningVM();
+            updateSigCoordsBadge();
         });
 
         // Zoom combo box changes
@@ -374,6 +401,15 @@ public class MainWindowController {
 
     private void setupPresetCombo() {
         cmbPresets.setItems(presetManager.getPresets());
+        // JavaFX doesn't restore promptText in the button cell after clearSelection()+setValue(null);
+        // a custom button cell fixes that by reading the current promptText when item is null.
+        cmbPresets.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(Preset item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(item != null ? item.toString() : cmbPresets.getPromptText());
+            }
+        });
         updatePresetComboState();
         presetManager.getPresets().addListener((javafx.collections.ListChangeListener<Preset>) c -> updatePresetComboState());
         cmbPresets.getSelectionModel().selectedItemProperty().addListener((obs, oldP, newP) -> {
@@ -491,6 +527,11 @@ public class MainWindowController {
         dialog.showAndWait();
     }
 
+    @FXML
+    private void onPreferences() {
+        PreferencesController.show(stage);
+    }
+
     private String validationMessage(PresetValidation.Result result) {
         switch (result) {
             case EMPTY: return RES.get("jfx.gui.preset.validation.empty");
@@ -553,6 +594,22 @@ public class MainWindowController {
                 : RES.get("jfx.gui.status.invisibleSig"));
         lblSigStateBadge.getStyleClass().removeAll("visible-sig-badge", "invisible-sig-badge");
         lblSigStateBadge.getStyleClass().add(on ? "visible-sig-badge" : "invisible-sig-badge");
+        updateSigCoordsBadge();
+    }
+
+    private void updateSigCoordsBadge() {
+        if (lblSigCoords == null) return;
+        boolean show = signingVM.visibleProperty().get()
+                    && documentVM.documentLoadedProperty().get()
+                    && placementVM.isPlaced();
+        lblSigCoords.setVisible(show);
+        if (show) {
+            lblSigCoords.setText(String.format("(%d, %d) — (%d, %d)",
+                    Math.round(signingVM.positionLLXProperty().get()),
+                    Math.round(signingVM.positionLLYProperty().get()),
+                    Math.round(signingVM.positionURXProperty().get()),
+                    Math.round(signingVM.positionURYProperty().get())));
+        }
     }
 
     /**
@@ -676,10 +733,34 @@ public class MainWindowController {
 
     private void updateStatusWithHint() {
         if (documentVM.isDocumentLoaded() && placementVM.isPlaced()) {
-            updateStatus(RES.get("jfx.gui.status.shiftToReplace"));
+            showShiftHint();
         } else if (documentVM.isDocumentLoaded()) {
+            cancelShiftHint();
             updateStatusForDocument();
         }
+    }
+
+    /** Briefly show the Shift-to-replace hint, then revert to filename/page. */
+    private void showShiftHint() {
+        if (!documentVM.isDocumentLoaded() || !placementVM.isPlaced()) return;
+        final String hintText = RES.get("jfx.gui.status.shiftToReplace");
+        updateStatus(hintText);
+        if (shiftHintTimer == null) {
+            shiftHintTimer = new PauseTransition(Duration.seconds(4));
+        } else {
+            shiftHintTimer.stop();
+        }
+        // Only revert if the hint is still the message being shown
+        shiftHintTimer.setOnFinished(ev -> {
+            if (hintText.equals(lblStatus.getText())) {
+                updateStatusForDocument();
+            }
+        });
+        shiftHintTimer.playFromStart();
+    }
+
+    private void cancelShiftHint() {
+        if (shiftHintTimer != null) shiftHintTimer.stop();
     }
 
     private void renderCurrentPage() {
@@ -713,11 +794,10 @@ public class MainWindowController {
 
     @FXML
     private void onFileOpen() {
-        FileChooser fileChooser = new FileChooser();
-        fileChooser.setTitle(RES.get("jfx.gui.dialog.openPdf.title"));
-        fileChooser.getExtensionFilters().add(
-                new FileChooser.ExtensionFilter("PDF Files", "*.pdf"));
-        File file = fileChooser.showOpenDialog(stage);
+        File file = new NativeFileChooser()
+                .setTitle(RES.get("jfx.gui.dialog.openPdf.title"))
+                .addFilter(ExtensionFilter.of("PDF Files", "*.pdf"))
+                .showOpenDialog(stage);
         if (file != null) {
             openDocument(file);
         }
@@ -774,25 +854,37 @@ public class MainWindowController {
                     RES.get("jfx.gui.dialog.noDocument.text"));
             return;
         }
-        FileChooser fc = new FileChooser();
-        fc.setTitle(RES.get("jfx.gui.dialog.selectOutputPdf"));
-        fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("PDF Files", "*.pdf"));
+        promptForOutputFile();
+    }
+
+    /**
+     * Opens the Save dialog and stores the chosen path in the signing VM. Returns true
+     * if the user picked a file, false if they cancelled. Skips the doc-portal path as
+     * an initial directory — the portal silently ignores it and writes there don't
+     * persist on the host (see {@link Sandbox#isDocPortalPath}).
+     */
+    private boolean promptForOutputFile() {
         String current = signingVM.outFileProperty().get();
         if (current == null || current.isEmpty()) {
             current = suggestedOutFileFor(documentVM.getDocumentFile());
         }
+        NativeFileChooser fc = new NativeFileChooser()
+                .setTitle(RES.get("jfx.gui.dialog.selectOutputPdf"))
+                .addFilter(ExtensionFilter.of("PDF Files", "*.pdf"));
         if (current != null && !current.isEmpty()) {
             File currentFile = new File(current);
-            File parent = currentFile.getParentFile();
-            if (parent != null && parent.isDirectory()) {
-                fc.setInitialDirectory(parent);
+            if (!Sandbox.isDocPortalPath(current)) {
+                File parent = currentFile.getParentFile();
+                if (parent != null && parent.isDirectory()) {
+                    fc.setInitialDirectory(parent);
+                }
             }
             fc.setInitialFileName(currentFile.getName());
         }
         File file = fc.showSaveDialog(stage);
-        if (file != null) {
-            signingVM.outFileProperty().set(file.getAbsolutePath());
-        }
+        if (file == null) return false;
+        signingVM.outFileProperty().set(file.getAbsolutePath());
+        return true;
     }
 
     @FXML
@@ -821,6 +913,19 @@ public class MainWindowController {
                     RES.get("jfx.gui.dialog.missingTsaUrl.title"),
                     RES.get("jfx.gui.dialog.missingTsaUrl.text"));
             return;
+        }
+
+        // In a sandbox, the auto-derived "<input>_signed.pdf" lands inside the doc
+        // portal FUSE mount and is not exposed back to the host. Force a Save dialog
+        // (routed through the portal) so the user picks a real persistable location.
+        String effectiveOut = signingVM.outFileProperty().get();
+        if (effectiveOut == null || effectiveOut.isEmpty()) {
+            effectiveOut = suggestedOutFileFor(documentVM.getDocumentFile());
+        }
+        if (Sandbox.isDocPortalPath(effectiveOut)) {
+            if (!promptForOutputFile()) {
+                return;
+            }
         }
 
         // Capture live placement into the signing VM, then sync VM → options.

@@ -1,37 +1,12 @@
-/*
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * The Original Code is 'JSignPdf, a free application for PDF signing'.
- *
- * The Initial Developer of the Original Code is Josef Cacek.
- * Portions created by Josef Cacek are Copyright (C) Josef Cacek. All Rights Reserved.
- *
- * Contributor(s): Josef Cacek.
- *
- * Alternatively, the contents of this file may be used under the terms
- * of the GNU Lesser General Public License, version 2.1 (the  "LGPL License"), in which case the
- * provisions of LGPL License are applicable instead of those
- * above. If you wish to allow use of your version of this file only
- * under the terms of the LGPL License and not to allow others to use
- * your version of this file under the MPL, indicate your decision by
- * deleting the provisions above and replace them with the notice and
- * other provisions required by the LGPL License. If you do not delete
- * the provisions above, a recipient may use your version of this file
- * under either the MPL or the LGPL License.
- */
 package net.sf.jsignpdf.utils;
 
 import static net.sf.jsignpdf.Constants.LOGGER;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.Provider;
 import java.security.Security;
@@ -46,8 +21,41 @@ import org.apache.commons.lang3.StringUtils;
  */
 public class PKCS11Utils {
 
+    private static final String SAMPLE_RESOURCE = "/net/sf/jsignpdf/conf/pkcs11.cfg.sample";
+
     public static volatile Provider SUN_PROVIDER;
     public static volatile Provider JSIGN_PROVIDER;
+
+    /**
+     * Registers PKCS#11 providers from {@code <cfg>/pkcs11.cfg} when that file exists. No-op if the config dir is unresolved
+     * or the file is missing — matching the empty-path early-return in {@link #registerProviders(String)}.
+     */
+    public static void registerProvidersFromDefaultLocation() {
+        Path cfgFile = ConfigLocationResolver.getInstance().getPkcs11ConfigFile();
+        if (cfgFile == null) {
+            return;
+        }
+        if (Files.isRegularFile(cfgFile)) {
+            registerProviders(cfgFile.toString());
+        }
+    }
+
+    /**
+     * Returns the bundled PKCS#11 sample as a String. Used by the Preferences PKCS#11 tab to populate the textarea on
+     * "Reset to bundled sample".
+     */
+    public static String getSampleConfig() {
+        try (InputStream is = PKCS11Utils.class.getResourceAsStream(SAMPLE_RESOURCE)) {
+            if (is == null) {
+                LOGGER.warning("Bundled PKCS#11 sample missing: " + SAMPLE_RESOURCE);
+                return "";
+            }
+            return new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOGGER.log(Level.WARNING, "Failed to read bundled PKCS#11 sample", e);
+            return "";
+        }
+    }
 
     /**
      * Tries to register the sun.security.pkcs11.SunPKCS11 provider with configuration provided in the given file.

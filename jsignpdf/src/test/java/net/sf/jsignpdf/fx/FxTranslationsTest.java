@@ -108,6 +108,7 @@ public class FxTranslationsTest {
             assertMenuContains(fileMenu, bundle, "jfx.gui.menu.file.close", locale);
             assertMenuContains(fileMenu, bundle, "jfx.gui.menu.file.saveAs", locale);
             assertMenuContains(fileMenu, bundle, "jfx.gui.menu.file.resetSettings", locale);
+            assertMenuContains(fileMenu, bundle, "jfx.gui.menu.file.preferences", locale);
             assertMenuContains(fileMenu, bundle, "jfx.gui.menu.file.exit", locale);
         }
     }
@@ -359,8 +360,7 @@ public class FxTranslationsTest {
         assertEquals("Datei", menuBar.getMenus().get(0).getText());
         assertEquals("Ansicht", menuBar.getMenus().get(1).getText());
         assertEquals("Signierung", menuBar.getMenus().get(2).getText());
-        // "Presets" key has no German translation yet — falls back to English.
-        assertEquals("Presets", menuBar.getMenus().get(3).getText());
+        assertEquals("Voreinstellungen", menuBar.getMenus().get(3).getText());
         assertEquals("Hilfe", menuBar.getMenus().get(4).getText());
     }
 

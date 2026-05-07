@@ -1,10 +1,8 @@
 package net.sf.jsignpdf.fx.control;
 
-import javafx.beans.binding.Bindings;
 import javafx.scene.Cursor;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Pane;
-import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 import net.sf.jsignpdf.fx.viewmodel.SignaturePlacementViewModel;
 
@@ -24,6 +22,8 @@ public class SignatureOverlay extends Pane {
     private double dragStartX, dragStartY;
     private double dragStartRelX, dragStartRelY, dragStartRelW, dragStartRelH;
     private DragMode dragMode = DragMode.NONE;
+
+    private Runnable onReplaceBlocked;
 
     private enum DragMode { NONE, CREATE, MOVE, RESIZE_TL, RESIZE_TR, RESIZE_BL, RESIZE_BR }
 
@@ -133,6 +133,7 @@ public class SignatureOverlay extends Pane {
         // Require Shift to replace an existing rectangle
         if (viewModel.isPlaced() && !e.isShiftDown()) {
             dragMode = DragMode.NONE;
+            if (onReplaceBlocked != null) onReplaceBlocked.run();
             e.consume();
             return;
         }
@@ -260,6 +261,11 @@ public class SignatureOverlay extends Pane {
 
     private static boolean near(double x1, double y1, double x2, double y2, double tol) {
         return Math.abs(x1 - x2) < tol && Math.abs(y1 - y2) < tol;
+    }
+
+    /** Invoked when the user presses on the overlay without Shift while a rectangle is already placed. */
+    public void setOnReplaceBlocked(Runnable handler) {
+        this.onReplaceBlocked = handler;
     }
 
     private static double clamp(double v, double min, double max) {

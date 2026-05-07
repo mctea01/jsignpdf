@@ -1,32 +1,3 @@
-/*
- * The contents of this file are subject to the Mozilla Public License
- * Version 1.1 (the "License"); you may not use this file except in
- * compliance with the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * The Original Code is 'JSignPdf, a free application for PDF signing'.
- *
- * The Initial Developer of the Original Code is Josef Cacek.
- * Portions created by Josef Cacek are Copyright (C) Josef Cacek. All Rights Reserved.
- *
- * Contributor(s): Josef Cacek.
- *
- * Alternatively, the contents of this file may be used under the terms
- * of the GNU Lesser General Public License, version 2.1 (the  "LGPL License"), in which case the
- * provisions of LGPL License are applicable instead of those
- * above. If you wish to allow use of your version of this file only
- * under the terms of the LGPL License and not to allow others to use
- * your version of this file under the MPL, indicate your decision by
- * deleting the provisions above and replace them with the notice and
- * other provisions required by the LGPL License. If you do not delete
- * the provisions above, a recipient may use your version of this file
- * under either the MPL or the LGPL License.
- */
 package net.sf.jsignpdf.utils;
 
 import static net.sf.jsignpdf.Constants.LOGGER;
@@ -41,8 +12,9 @@ import java.util.function.Function;
 import java.util.logging.Level;
 
 /**
- * Resolves the application's config directory, the main config file, and the presets directory, and handles the one-shot
- * migration from the legacy {@code ~/.JSignPdf} file layout.
+ * Resolves the application's config directory, the main config file, the presets directory, and the advanced/PKCS#11
+ * config files. On first launch, performs a one-shot migration of the legacy {@code ~/.JSignPdf} file into
+ * {@code <cfg>/config.properties}.
  * <p>
  * Resolution order:
  * <ol>
@@ -61,6 +33,8 @@ public final class ConfigLocationResolver {
     static final String LEGACY_FILE_NAME = ".JSignPdf";
     static final String MAIN_CONFIG_FILE_NAME = "config.properties";
     static final String PRESETS_DIR_NAME = "presets";
+    static final String ADVANCED_CONFIG_FILE_NAME = "advanced.properties";
+    static final String PKCS11_CONFIG_FILE_NAME = "pkcs11.cfg";
 
     public enum OsType { LINUX, WINDOWS, MAC }
 
@@ -123,6 +97,22 @@ public final class ConfigLocationResolver {
         return dir == null ? null : dir.resolve(PRESETS_DIR_NAME);
     }
 
+    /**
+     * Path to the advanced-config file ({@code <cfg>/advanced.properties}). May be {@code null} if {@link #getConfigDir()} is.
+     */
+    public Path getAdvancedConfigFile() {
+        Path dir = getConfigDir();
+        return dir == null ? null : dir.resolve(ADVANCED_CONFIG_FILE_NAME);
+    }
+
+    /**
+     * Path to the PKCS#11 provider config file ({@code <cfg>/pkcs11.cfg}). May be {@code null} if {@link #getConfigDir()} is.
+     */
+    public Path getPkcs11ConfigFile() {
+        Path dir = getConfigDir();
+        return dir == null ? null : dir.resolve(PKCS11_CONFIG_FILE_NAME);
+    }
+
     // Visible for tests.
     Path resolveAndMigrate() {
         Path target = resolveTargetDir();
@@ -148,6 +138,7 @@ public final class ConfigLocationResolver {
             LOGGER.log(Level.WARNING, "Failed to create config directory " + target, e);
             return null;
         }
+
         return target;
     }
 

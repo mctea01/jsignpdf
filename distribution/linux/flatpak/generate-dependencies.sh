@@ -77,6 +77,22 @@ TEMP_JSON="/tmp/maven-deps-\$\$.json"
 
 # Find all .jar, .pom, .aar files and generate JSON entries
 find "\$M2_DIR" -type f \( -name "*.jar" -o -name "*.pom" -o -name "*.aar" \) | sort | while read -r file; do
+  filename=\$(basename "\$file")
+  dir=\$(dirname "\$file")
+
+  # Only include artifacts that came from Maven Central.
+  # _remote.repositories records the source repo per file:
+  #   "filename>central="           → downloaded from Maven Central  ✓ keep
+  #   "filename>="                  → locally installed by mvn install  ✗ skip
+  #   "filename>s01-...="           → downloaded from the snapshot repo  ✗ skip
+  # Using a whitelist avoids both locally-built modules and project snapshot
+  # artifacts (sources JARs etc.) that Maven fetches from the snapshot repo
+  # but whose Maven Central URL would 404 in flatpak-builder.
+  if [[ ! -f "\$dir/_remote.repositories" ]] || \
+     ! grep -qE "^\${filename}>central=" "\$dir/_remote.repositories"; then
+    continue
+  fi
+
   # Get relative path from M2_DIR
   rel_path="\${file#\$M2_DIR/}"
 
@@ -88,9 +104,6 @@ find "\$M2_DIR" -type f \( -name "*.jar" -o -name "*.pom" -o -name "*.aar" \) | 
 
   # Get destination directory (parent directory in m2local)
   dest_dir="m2local/\$(dirname "\$rel_path")"
-
-  # Get filename
-  filename=\$(basename "\$file")
 
   # Write compact JSON entry on single line for easier comma handling
   echo "{\"type\":\"file\",\"url\":\"\$url\",\"sha256\":\"\$sha256\",\"dest\":\"\$dest_dir\",\"dest-filename\":\"\$filename\"}"

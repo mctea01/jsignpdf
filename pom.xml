@@ -3,7 +3,7 @@
 
     <groupId>com.github.kwart.jsign</groupId>
     <artifactId>jsignpdf-root</artifactId>
-    <version>3.0.0-SNAPSHOT</version>
+    <version>3.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>${project.artifactId}</name>
@@ -18,10 +18,11 @@
         <maven.clean.plugin.version>3.5.0</maven.clean.plugin.version>
         <maven.surefire.plugin.version>3.5.5</maven.surefire.plugin.version>
         <maven.assembly.plugin.version>3.8.0</maven.assembly.plugin.version>
-        <maven.enforcer.plugin.version>3.6.2</maven.enforcer.plugin.version>
+        <maven.enforcer.plugin.version>3.6.3</maven.enforcer.plugin.version>
         <maven.jar.plugin.version>3.5.0</maven.jar.plugin.version>
         <maven.dependency.plugin.version>3.10.0</maven.dependency.plugin.version>
-        <maven.shade.plugin.version>3.6.2</maven.shade.plugin.version>
+        <maven.appassembler.plugin.version>2.1.0</maven.appassembler.plugin.version>
+        <build.helper.plugin.version>3.6.1</build.helper.plugin.version>
 
         <bouncycastle.version>1.84</bouncycastle.version>
         <jsign.pkcs11.version>1.1.0</jsign.pkcs11.version>
@@ -30,13 +31,14 @@
         <commons-io.version>2.22.0</commons-io.version>
         <commons-cli.version>1.11.0</commons-cli.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
-        <openpdf.version>3.0.4</openpdf.version>
+        <openpdf.version>3.0.5</openpdf.version>
         <junit.version>4.13.2</junit.version>
-        <openjfx.version>21.0.7</openjfx.version>
+        <openjfx.version>21.0.11</openjfx.version>
         <dbus-java.version>5.2.0</dbus-java.version>
     </properties>
 
     <modules>
+        <module>jsignpdf-bootstrap</module>
         <module>jsignpdf</module>
         <module>installcert</module>
         <module>distribution</module>
@@ -190,22 +192,14 @@
                     <version>${maven.enforcer.plugin.version}</version>
                 </plugin>
                 <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-shade-plugin</artifactId>
-                    <version>${maven.shade.plugin.version}</version>
-                    <configuration>
-                        <filters>
-                            <filter>
-                                <artifact>*:*</artifact>
-                                <excludes>
-                                    <exclude>META-INF/*.SF</exclude>
-                                    <exclude>META-INF/*.DSA</exclude>
-                                    <exclude>META-INF/*.RSA</exclude>
-                                    <exclude>**/module-info.class</exclude>
-                                </excludes>
-                            </filter>
-                        </filters>
-                    </configuration>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>appassembler-maven-plugin</artifactId>
+                    <version>${maven.appassembler.plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>build-helper-maven-plugin</artifactId>
+                    <version>${build.helper.plugin.version}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.codehaus.mojo</groupId>
@@ -223,6 +217,10 @@
                             <licenseMerge>
                                 MIT |
                                 MIT License
+                            </licenseMerge>
+                            <licenseMerge>
+                                Apache-2.0 |
+                                Apache License 2.0
                             </licenseMerge>
                             <licenseMerge>
                                 LGPL-2.1 |

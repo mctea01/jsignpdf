@@ -1,13 +1,24 @@
 name: Do Release
 
+# This workflow is the IRREVERSIBLE half of a release: it bumps versions,
+# commits, tags the repo, and deploys to Maven Central (library jars + the
+# full/minimal distribution ZIPs as classified artifacts on
+# com.github.kwart.jsign:jsignpdf-distribution). It then chains to
+# package-release.yml for the per-platform installers + GitHub Release.
+#
+# If the packaging half fails or times out (e.g. a starved macOS runner pool),
+# DO NOT re-run this workflow — re-run `Package Release` standalone with the
+# same release version; it rebuilds everything from the ZIPs already on
+# Maven Central. See design-doc/3.1-separate-release-steps.md.
+
 on:
   workflow_dispatch:
     inputs:
       release-version:
-        description: 'Version to be released (e.g. 2.3.0).'
+        description: 'Version to be released (e.g. 3.1.0).'
         required: true
       next-snapshot-version:
-        description: 'Version to be set after the release - without the -SNAPSHOT suffix (e.g. 2.4.0).'
+        description: 'Version to be set after the release - without the -SNAPSHOT suffix (e.g. 3.2.0).'
         required: true
 
 env:
@@ -16,16 +27,26 @@ env:
   GIT_COMMITTER_NAME: Terminator the Kitty
   GIT_COMMITTER_EMAIL: <>
 
+# Cancel a previous workflow on the same ref (e.g. when re-running a release
+# manually). We do NOT cancel in-progress runs — a half-finished release would
+# leave Maven Central and SourceForge in an inconsistent state.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   do-release:
-    runs-on: ubuntu-latest
+    # Tags the repo and deploys the library jars + the full/minimal ZIPs to
+    # Maven Central. The ZIPs become the durable, mirror-able inputs the
+    # package-release workflow downloads to drive the per-platform jpackage
+    # builds and the Flatpak bundle.
+    runs-on: ubuntu-24.04
     outputs:
-      tag: ${{ steps.maven_release.outputs.TAG }}
       version: ${{ steps.maven_release.outputs.VERSION }}
-      base-version: ${{ steps.maven_release.outputs.BASE_VERSION }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+
     - name: Verify release notes file exists
       run: |
         VERSION=${{ github.event.inputs.release-version }}
@@ -37,6 +58,7 @@ jobs:
           exit 1
         fi
         echo "Found release notes: $NOTES_FILE"
+
     - name: Set up Java and credentials
       uses: actions/setup-java@v5
       with:
@@ -49,12 +71,10 @@ jobs:
         gpg-passphrase: MAVEN_GPG_PASSPHRASE
         cache: 'maven'
 
-    - name: Do the Maven release and prepare Linux assets
+    - name: Do the Maven release (deploys jars + full/minimal ZIPs to Central)
       id: maven_release
       run: |
         VERSION=${{ github.event.inputs.release-version }}
-        BASE_VERSION="${VERSION%%-*}"
-        FULL_VERSION="JSignPdf-$VERSION"
         NEXT_VERSION=${{ github.event.inputs.next-snapshot-version }}-SNAPSHOT
         TAG=JSignPdf_${VERSION//\./_}
         set -x
@@ -65,255 +85,19 @@ jobs:
         mvn -P release --batch-mode release:perform \
             -DstagingProgressTimeoutMinutes=30 -Dmaven.wagon.rto=7200000 \
             -Dmaven.wagon.httpconnectionManager.maxPerRoute=60 -Dmaven.wagon.httpconnectionManager.maxTotal=100
-        cd distribution/target
-        ls -R
-        mkdir upload
-        mv *.zip upload/
-        cp generated-docs/JSignPdf.pdf "upload/$FULL_VERSION.pdf"
-        cp "../doc/release-notes/${BASE_VERSION}.md" upload/README.md
-        echo "TAG=$TAG" >> $GITHUB_OUTPUT
         echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-        echo "BASE_VERSION=$BASE_VERSION" >> $GITHUB_OUTPUT
       env:
         MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
         MAVEN_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
         MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
 
-    - name: Stage Linux release assets for the publish job
-      uses: actions/upload-artifact@v7
-      with:
-        name: jsignpdf-linux-assets
-        path: distribution/target/upload/*
-        if-no-files-found: error
-        retention-days: 1
-
-    - name: Publish PDF guide for downstream jobs
-      uses: actions/upload-artifact@v7
-      with:
-        name: jsignpdf-pdf-guide
-        path: distribution/target/generated-docs/JSignPdf.pdf
-        if-no-files-found: error
-        retention-days: 1
-
-  windows-installers:
+  # Happy-path chaining: build the per-platform installers + GitHub Release
+  # from the ZIPs just published to Maven Central. This is the same reusable
+  # workflow you can re-dispatch standalone to recover a failed/timed-out
+  # packaging run without re-releasing.
+  package-release:
     needs: do-release
-    runs-on: windows-latest
-    steps:
-    - name: Checkout release tag
-      uses: actions/checkout@v6
-      with:
-        ref: ${{ needs.do-release.outputs.tag }}
-
-    - name: Set up JDK 21
-      uses: actions/setup-java@v5
-      with:
-        java-version: 21
-        distribution: 'temurin'
-        cache: 'maven'
-
-    - name: Build jsignpdf and installcert jars
-      shell: bash
-      run: mvn -B -DskipTests -pl jsignpdf,installcert -am package
-
-    - name: Download PDF guide from the release job
-      uses: actions/download-artifact@v8
-      with:
-        name: jsignpdf-pdf-guide
-        path: distribution/target/pdf-guide
-
-    - name: Build Windows installers (EXE / MSI / ZIP)
-      shell: pwsh
-      run: ./distribution/windows/build-windows-installers.ps1 -Version ${{ needs.do-release.outputs.version }}
-
-    - name: Upload unsigned Windows installers for SignPath
-      id: upload-unsigned-windows
-      uses: actions/upload-artifact@v7
-      with:
-        name: jsignpdf-windows-assets-unsigned
-        path: distribution/target/upload/*
-        if-no-files-found: error
-        retention-days: 1
-
-    - name: Submit signing request to SignPath
-      uses: signpath/github-action-submit-signing-request@v2
-      with:
-        api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
-        organization-id: '8d0ef437-1c25-49c6-9954-ed7fe51f9df8'
-        project-slug: 'jsignpdf'
-        signing-policy-slug: 'test-signing'
-        artifact-configuration-slug: 'zip'
-        github-artifact-id: '${{ steps.upload-unsigned-windows.outputs.artifact-id }}'
-        wait-for-completion: true
-        output-artifact-directory: 'distribution/target/signed'
-
-    - name: Stage signed Windows installers for the publish job
-      uses: actions/upload-artifact@v7
-      with:
-        name: jsignpdf-windows-assets
-        path: distribution/target/signed/*
-        if-no-files-found: error
-        retention-days: 1
-
-  linux-flatpak:
-    needs: do-release
-    runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ needs.do-release.outputs.version }}
-    steps:
-    - name: Checkout release tag
-      uses: actions/checkout@v6
-      with:
-        ref: ${{ needs.do-release.outputs.tag }}
-
-    - name: Download Linux assets
-      uses: actions/download-artifact@v8
-      with:
-        name: jsignpdf-linux-assets
-        path: linux-assets
-
-    - name: Cache Flatpak SDK
-      uses: actions/cache@v5
-      with:
-        path: ~/.local/share/flatpak
-        key: flatpak-sdk-25.08
-
-    - name: Install Flatpak and build tools
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y flatpak flatpak-builder
-        flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-        # SDK version must match runtime-version in distribution/linux/flatpak/io.github.intoolswetrust.JSignPdf.yaml
-        flatpak install --user -y --noninteractive flathub \
-          org.freedesktop.Platform//25.08 \
-          org.freedesktop.Sdk//25.08 \
-          org.freedesktop.Sdk.Extension.openjdk21//25.08
-
-    - name: Patch manifest to use local zip
-      run: |
-        set -euo pipefail
-        MANIFEST=distribution/linux/flatpak/io.github.intoolswetrust.JSignPdf.yaml
-        ZIP_NAME=jsignpdf-${VERSION}.zip
-        SHA256=$(sha256sum "linux-assets/${ZIP_NAME}" | awk '{print $1}')
-        cp "linux-assets/${ZIP_NAME}" distribution/linux/flatpak/
-        sed -i \
-          "s|        url: https://downloads\.sourceforge\.net.*\.zip|        path: ${ZIP_NAME}|" \
-          "${MANIFEST}"
-        grep -q "path: ${ZIP_NAME}" "${MANIFEST}" \
-          || { echo "::error::URL sed patch did not match — check manifest indentation"; exit 1; }
-        sed -i \
-          "s|sha256: [a-f0-9]\{64\}|sha256: ${SHA256}|" \
-          "${MANIFEST}"
-        grep -q "sha256: ${SHA256}" "${MANIFEST}" \
-          || { echo "::error::sha256 sed patch did not match"; exit 1; }
-
-    - name: Build Flatpak bundle
-      run: |
-        set -euo pipefail
-        BUNDLE_NAME=JSignPdf-${VERSION}-linux-x86_64.flatpak
-        cd distribution/linux/flatpak
-        flatpak-builder --user --repo=flatpak-repo --force-clean --disable-rofiles-fuse build-dir \
-          io.github.intoolswetrust.JSignPdf.yaml
-        flatpak build-bundle flatpak-repo "${BUNDLE_NAME}" \
-          io.github.intoolswetrust.JSignPdf
-        mkdir -p upload
-        mv "${BUNDLE_NAME}" upload/
-
-    - name: Stage Flatpak bundle for publish job
-      uses: actions/upload-artifact@v7
-      with:
-        name: jsignpdf-flatpak-assets
-        path: distribution/linux/flatpak/upload/*
-        if-no-files-found: error
-        retention-days: 1
-
-  publish-release:
-    needs: [do-release, windows-installers, linux-flatpak]
-    # Flatpak is optional: publish even if its job failed, as long as the
-    # required jobs (do-release, windows-installers) succeeded.
-    if: |
-      always()
-      && needs.do-release.result == 'success'
-      && needs.windows-installers.result == 'success'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      TAG: ${{ needs.do-release.outputs.tag }}
-      VERSION: ${{ needs.do-release.outputs.version }}
-      BASE_VERSION: ${{ needs.do-release.outputs.base-version }}
-      FULL_VERSION: JSignPdf-${{ needs.do-release.outputs.version }}
-    steps:
-    - name: Checkout release tag
-      uses: actions/checkout@v6
-      with:
-        ref: ${{ needs.do-release.outputs.tag }}
-
-    - name: Download Linux assets
-      uses: actions/download-artifact@v8
-      with:
-        name: jsignpdf-linux-assets
-        path: release-assets/JSignPdf-${{ needs.do-release.outputs.version }}
-
-    - name: Download Windows assets
-      uses: actions/download-artifact@v8
-      with:
-        name: jsignpdf-windows-assets
-        path: release-assets/JSignPdf-${{ needs.do-release.outputs.version }}
-
-    - name: Download Flatpak bundle
-      if: needs.linux-flatpak.result == 'success'
-      uses: actions/download-artifact@v8
-      with:
-        name: jsignpdf-flatpak-assets
-        path: release-assets/JSignPdf-${{ needs.do-release.outputs.version }}
-
-    - name: List staged assets
-      run: ls -R release-assets
-
-    - name: Upload all assets to SourceForge
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      run: |
-        set -euo pipefail
-        echo "$SSH_PRIVATE_KEY" > private_key
-        chmod 600 private_key
-        cd release-assets
-        sftp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ../private_key kwart@frs.sourceforge.net:/home/frs/project/jsignpdf/stable <<EOF
-        put -R "${FULL_VERSION}"
-        exit
-        EOF
-        cd ..
-        rm -f private_key
-
-    - name: Create GitHub release with all assets
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -euo pipefail
-        NOTES_FILE="distribution/doc/release-notes/${BASE_VERSION}.md"
-        if [ ! -f "$NOTES_FILE" ]; then
-          echo "::error::Release notes file not found at $NOTES_FILE"
-          exit 1
-        fi
-        # Delete any pre-existing release so we publish a single release event
-        # with the correct body and the full asset set in one shot.
-        if gh release view "$TAG" >/dev/null 2>&1; then
-          gh release delete "$TAG" --yes --cleanup-tag=false
-        fi
-        shopt -s nullglob
-        assets=(release-assets/"$FULL_VERSION"/*)
-        if [ ${#assets[@]} -eq 0 ]; then
-          echo "::error::No assets found under release-assets/$FULL_VERSION/"
-          exit 1
-        fi
-        prerelease_flag=()
-        shopt -s nocasematch
-        if [[ "$VERSION" == *ALPHA* || "$VERSION" == *BETA* || "$VERSION" == *RC* || "$VERSION" == *MILESTONE* ]]; then
-          prerelease_flag=(--prerelease)
-        fi
-        shopt -u nocasematch
-        gh release create "$TAG" \
-          --title "$TAG" \
-          --notes-file "$NOTES_FILE" \
-          "${prerelease_flag[@]}" \
-          "${assets[@]}"
+    uses: ./.github/workflows/package-release.yml
+    with:
+      release-version: ${{ needs.do-release.outputs.version }}
+    secrets: inherit

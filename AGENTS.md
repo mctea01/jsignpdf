@@ -20,10 +20,15 @@ mvn test -Dtest=BasicSigningTest     # Run a single test class
 
 ```
 jsignpdf-root/
-├── jsignpdf/          # Main application (signing logic + GUI + CLI)
-├── installcert/       # Certificate installer utility
-├── distribution/      # Packaging: ZIP assembly, Windows installer, docs
-└── website/           # Hugo documentation site (not a Maven module)
+├── jsignpdf-bootstrap/  # Java-8 launcher (Bootstrap.java): JRE-version check + JFX
+│                          classifier picker + reflective Signer.main. Used by the
+│                          cross-platform ZIPs (bin/jsignpdf.sh|.cmd → Bootstrap → Signer).
+├── jsignpdf/            # Main application (signing logic + GUI + CLI)
+├── installcert/         # Certificate installer utility
+├── distribution/        # Per-platform packaging — assembles full + minimal ZIPs and
+│                          drives jpackage for MSI / DEB / RPM / DMG (windows/, linux/,
+│                          macos/ subfolders) plus the Flatpak manifest.
+└── website/             # Hugo documentation site (not a Maven module)
     └── docs/JSignPdf.adoc  # ★ authoritative user guide (see below)
 ```
 
@@ -108,4 +113,5 @@ Per-user state lives under a platform-native `<config-dir>` resolved by `ConfigL
 |---|---|---|
 | `pr-builder.yaml` | PR/push to master | `mvn verify` with Java 21 |
 | `push-snapshots.yaml` | Push to master | Deploy SNAPSHOTs to Maven Central |
-| `do-release.yml` | Manual dispatch | Full release |
+| `do-release.yml` | Manual dispatch | **Irreversible half** of a release: `mvn release:prepare`/`perform` → version-bump commits, git tag, Maven Central deploy of the library jars **and** the `full`/`minimal` distribution ZIPs (classified artifacts on `com.github.kwart.jsign:jsignpdf-distribution`, signed via the `release` profile). On success it chains to `package-release.yml`. **Do not re-run on a packaging failure** — re-dispatch `package-release.yml` instead. |
+| `package-release.yml` | Auto (called by `do-release.yml`) **or** manual dispatch | **Resumable half**: downloads the published `full`/`minimal` ZIPs from Maven Central (bounded retry for repo1 propagation), then per-platform jpackage matrix (windows-2022 / ubuntu-24.04 x2 / macos-14) → Flatpak matrix (x86_64 + aarch64) → publish (SHA-256 + SourceForge mirror + GitHub Release). The matrix packages the **exact Central bits** (scripts read the unpacked ZIP via `JSIGNPDF_LIB_DIR`), so re-dispatching it with the same `release-version` cleanly recovers a timed-out run without re-releasing. Native installers use Azul Zulu+FX 21 (`java-package: jdk+fx`) so JavaFX modules are available to `jlink`. No Intel-macOS build is shipped (Apple discontinued Intel; `macos-13` retiring). See `design-doc/3.1-separate-release-steps.md`. |
